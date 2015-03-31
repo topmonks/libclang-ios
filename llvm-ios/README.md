@@ -1,8 +1,10 @@
-# Description
+## Description
 
-Just issue `scripts/magic.sh` command to clone, patch, build and process fat (arm64, armv7, x86_64, i386) static `libclang` library and include files. Result can be found in `libclang` directory.
+Just issue `scripts/magic.sh` command to clone, patch, build and process fat
+(arm64, armv7, x86_64, i386) static `libclang` library and include files. Result can
+be found in `libclang` directory.
 
-# Comments
+## Comments
 
 It's not perfect ...
 
