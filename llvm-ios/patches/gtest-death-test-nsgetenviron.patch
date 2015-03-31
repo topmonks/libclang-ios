@@ -1,0 +1,43 @@
+--- a/llvm/utils/unittest/googletest/src/gtest-death-test.cc	2015-03-05 10:04:00.000000000 +0100
++++ b/llvm/utils/unittest/googletest/src/gtest-death-test.cc	2015-03-05 10:05:10.000000000 +0100
+@@ -36,10 +36,6 @@
+ 
+ #if GTEST_HAS_DEATH_TEST
+ 
+-# if GTEST_OS_MAC
+-#  include <crt_externs.h>
+-# endif  // GTEST_OS_MAC
+-
+ # include <errno.h>
+ # include <fcntl.h>
+ # include <limits.h>
+@@ -882,20 +878,6 @@
+   int close_fd;       // File descriptor to close; the read end of a pipe
+ };
+ 
+-#  if GTEST_OS_MAC
+-inline char** GetEnviron() {
+-  // When Google Test is built as a framework on MacOS X, the environ variable
+-  // is unavailable. Apple's documentation (man environ) recommends using
+-  // _NSGetEnviron() instead.
+-  return *_NSGetEnviron();
+-}
+-#  else
+-// Some POSIX platforms expect you to declare environ. extern "C" makes
+-// it reside in the global namespace.
+-extern "C" char** environ;
+-inline char** GetEnviron() { return environ; }
+-#  endif  // GTEST_OS_MAC
+-
+ // The main function for a threadsafe-style death test child process.
+ // This function is called in a clone()-ed process and thus must avoid
+ // any potentially unsafe operations like malloc or libc functions.
+@@ -921,7 +903,7 @@
+   // unsafe.  Since execve() doesn't search the PATH, the user must
+   // invoke the test program via a valid path that contains at least
+   // one path separator.
+-  execve(args->argv[0], args->argv, GetEnviron());
++  execve(args->argv[0], args->argv, NULL);
+   DeathTestAbort(String::Format("execve(%s, ...) in %s failed: %s",
+                                 args->argv[0],
+                                 original_dir,

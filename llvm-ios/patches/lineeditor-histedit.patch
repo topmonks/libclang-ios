@@ -1,0 +1,205 @@
+--- a/llvm/lib/LineEditor/LineEditor.cpp	2015-03-05 10:30:33.000000000 +0100
++++ b/llvm/lib/LineEditor/LineEditor.cpp	2015-03-05 10:31:38.000000000 +0100
+@@ -13,9 +13,6 @@
+ #include "llvm/Support/Path.h"
+ #include "llvm/Support/raw_ostream.h"
+ #include <stdio.h>
+-#ifdef HAVE_LIBEDIT
+-#include <histedit.h>
+-#endif
+ 
+ using namespace llvm;
+ 
+@@ -90,187 +87,6 @@
+   return Completer->complete(Buffer, Pos);
+ }
+ 
+-#ifdef HAVE_LIBEDIT
+-
+-// libedit-based implementation.
+-
+-struct LineEditor::InternalData {
+-  LineEditor *LE;
+-
+-  History *Hist;
+-  EditLine *EL;
+-
+-  unsigned PrevCount;
+-  std::string ContinuationOutput;
+-
+-  FILE *Out;
+-};
+-
+-static const char *ElGetPromptFn(EditLine *EL) {
+-  LineEditor::InternalData *Data;
+-  if (el_get(EL, EL_CLIENTDATA, &Data) == 0)
+-    return Data->LE->getPrompt().c_str();
+-  return "> ";
+-}
+-
+-// Handles tab completion.
+-//
+-// This function is really horrible. But since the alternative is to get into
+-// the line editor business, here we are.
+-static unsigned char ElCompletionFn(EditLine *EL, int ch) {
+-  LineEditor::InternalData *Data;
+-  if (el_get(EL, EL_CLIENTDATA, &Data) == 0) {
+-    if (!Data->ContinuationOutput.empty()) {
+-      // This is the continuation of the AK_ShowCompletions branch below.
+-      FILE *Out = Data->Out;
+-
+-      // Print the required output (see below).
+-      ::fwrite(Data->ContinuationOutput.c_str(),
+-               Data->ContinuationOutput.size(), 1, Out);
+-
+-      // Push a sequence of Ctrl-B characters to move the cursor back to its
+-      // original position.
+-      std::string Prevs(Data->PrevCount, '\02');
+-      ::el_push(EL, const_cast<char *>(Prevs.c_str()));
+-
+-      Data->ContinuationOutput.clear();
+-
+-      return CC_REFRESH;
+-    }
+-
+-    const LineInfo *LI = ::el_line(EL);
+-    LineEditor::CompletionAction Action = Data->LE->getCompletionAction(
+-        StringRef(LI->buffer, LI->lastchar - LI->buffer),
+-        LI->cursor - LI->buffer);
+-    switch (Action.Kind) {
+-    case LineEditor::CompletionAction::AK_Insert:
+-      ::el_insertstr(EL, Action.Text.c_str());
+-      return CC_REFRESH;
+-
+-    case LineEditor::CompletionAction::AK_ShowCompletions:
+-      if (Action.Completions.empty()) {
+-        return CC_REFRESH_BEEP;
+-      } else {
+-        // Push a Ctrl-E and a tab. The Ctrl-E causes libedit to move the cursor
+-        // to the end of the line, so that when we emit a newline we will be on
+-        // a new blank line. The tab causes libedit to call this function again
+-        // after moving the cursor. There doesn't seem to be anything we can do
+-        // from here to cause libedit to move the cursor immediately. This will
+-        // break horribly if the user has rebound their keys, so for now we do
+-        // not permit user rebinding.
+-        ::el_push(EL, const_cast<char *>("\05\t"));
+-
+-        // This assembles the output for the continuation block above.
+-        raw_string_ostream OS(Data->ContinuationOutput);
+-
+-        // Move cursor to a blank line.
+-        OS << "\n";
+-
+-        // Emit the completions.
+-        for (std::vector<std::string>::iterator I = Action.Completions.begin(),
+-                                                E = Action.Completions.end();
+-             I != E; ++I) {
+-          OS << *I << "\n";
+-        }
+-
+-        // Fool libedit into thinking nothing has changed. Reprint its prompt
+-        // and the user input. Note that the cursor will remain at the end of
+-        // the line after this.
+-        OS << Data->LE->getPrompt()
+-           << StringRef(LI->buffer, LI->lastchar - LI->buffer);
+-
+-        // This is the number of characters we need to tell libedit to go back:
+-        // the distance between end of line and the original cursor position.
+-        Data->PrevCount = LI->lastchar - LI->cursor;
+-
+-        return CC_REFRESH;
+-      }
+-    }
+-  }
+-  return CC_ERROR;
+-}
+-
+-LineEditor::LineEditor(StringRef ProgName, StringRef HistoryPath, FILE *In,
+-                       FILE *Out, FILE *Err)
+-    : Prompt((ProgName + "> ").str()), HistoryPath(HistoryPath),
+-      Data(new InternalData) {
+-  if (HistoryPath.empty())
+-    this->HistoryPath = getDefaultHistoryPath(ProgName);
+-
+-  Data->LE = this;
+-  Data->Out = Out;
+-
+-  Data->Hist = ::history_init();
+-  assert(Data->Hist);
+-
+-  Data->EL = ::el_init(ProgName.str().c_str(), In, Out, Err);
+-  assert(Data->EL);
+-
+-  ::el_set(Data->EL, EL_PROMPT, ElGetPromptFn);
+-  ::el_set(Data->EL, EL_EDITOR, "emacs");
+-  ::el_set(Data->EL, EL_HIST, history, Data->Hist);
+-  ::el_set(Data->EL, EL_ADDFN, "tab_complete", "Tab completion function",
+-           ElCompletionFn);
+-  ::el_set(Data->EL, EL_BIND, "\t", "tab_complete", NULL);
+-  ::el_set(Data->EL, EL_BIND, "^r", "em-inc-search-prev",
+-           NULL); // Cycle through backwards search, entering string
+-  ::el_set(Data->EL, EL_BIND, "^w", "ed-delete-prev-word",
+-           NULL); // Delete previous word, behave like bash does.
+-  ::el_set(Data->EL, EL_BIND, "\033[3~", "ed-delete-next-char",
+-           NULL); // Fix the delete key.
+-  ::el_set(Data->EL, EL_CLIENTDATA, Data.get());
+-
+-  HistEvent HE;
+-  ::history(Data->Hist, &HE, H_SETSIZE, 800);
+-  ::history(Data->Hist, &HE, H_SETUNIQUE, 1);
+-  loadHistory();
+-}
+-
+-LineEditor::~LineEditor() {
+-  saveHistory();
+-
+-  ::history_end(Data->Hist);
+-  ::el_end(Data->EL);
+-  ::fwrite("\n", 1, 1, Data->Out);
+-}
+-
+-void LineEditor::saveHistory() {
+-  if (!HistoryPath.empty()) {
+-    HistEvent HE;
+-    ::history(Data->Hist, &HE, H_SAVE, HistoryPath.c_str());
+-  }
+-}
+-
+-void LineEditor::loadHistory() {
+-  if (!HistoryPath.empty()) {
+-    HistEvent HE;
+-    ::history(Data->Hist, &HE, H_LOAD, HistoryPath.c_str());
+-  }
+-}
+-
+-Optional<std::string> LineEditor::readLine() const {
+-  // Call el_gets to prompt the user and read the user's input.
+-  int LineLen = 0;
+-  const char *Line = ::el_gets(Data->EL, &LineLen);
+-
+-  // Either of these may mean end-of-file.
+-  if (!Line || LineLen == 0)
+-    return Optional<std::string>();
+-
+-  // Strip any newlines off the end of the string.
+-  while (LineLen > 0 &&
+-         (Line[LineLen - 1] == '\n' || Line[LineLen - 1] == '\r'))
+-    --LineLen;
+-
+-  HistEvent HE;
+-  if (LineLen > 0)
+-    ::history(Data->Hist, &HE, H_ENTER, Line);
+-
+-  return std::string(Line, LineLen);
+-}
+-
+-#else
+-
+ // Simple fgets-based implementation.
+ 
+ struct LineEditor::InternalData {
+@@ -316,4 +132,3 @@
+   return Line;
+ }
+ 
+-#endif

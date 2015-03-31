@@ -1,0 +1,37 @@
+--- a/llvm/lib/Support/Unix/Program.inc	2015-03-05 09:57:56.000000000 +0100
++++ b/llvm/lib/Support/Unix/Program.inc	2015-03-05 09:59:36.000000000 +0100
+@@ -42,11 +42,7 @@
+ #define  _RESTRICT_KYWD
+ #endif
+ #include <spawn.h>
+-#if !defined(__APPLE__)
+-  extern char **environ;
+-#else
+-#include <crt_externs.h> // _NSGetEnviron
+-#endif
++extern char **environ;
+ #endif
+ 
+ namespace llvm {
+@@ -216,20 +212,12 @@
+       }
+     }
+ 
+-    if (!envp)
+-#if !defined(__APPLE__)
+-      envp = const_cast<const char **>(environ);
+-#else
+-      // environ is missing in dylibs.
+-      envp = const_cast<const char **>(*_NSGetEnviron());
+-#endif
+-
+     // Explicitly initialized to prevent what appears to be a valgrind false
+     // positive.
+     pid_t PID = 0;
+     int Err = posix_spawn(&PID, Program.str().c_str(), FileActions,
+                           /*attrp*/nullptr, const_cast<char **>(args),
+-                          const_cast<char **>(envp));
++                          NULL);
+ 
+     if (FileActions)
+       posix_spawn_file_actions_destroy(FileActions);
